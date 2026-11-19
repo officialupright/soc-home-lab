@@ -1,0 +1,122 @@
+<!--
+  SOC Home Lab - Custom Wazuh Detection Rules
+  Author : Ifeanyi Solomon Uneze (github.com/officialupright)
+  Install: copy to /var/ossec/etc/rules/local_rules.xml on the Wazuh manager,
+           then run: sudo systemctl restart wazuh-manager
+
+  Every rule is mapped to MITRE ATT&CK so alerts show up in the
+  Wazuh "MITRE ATT&CK" module with the right technique.
+
+  Rule ID range 100100-100199 is reserved for this lab.
+  Levels: 3-7 = informational/low, 8-11 = medium, 12-15 = high/critical
+-->
+
+<group name="soc_home_lab,sysmon,">
+
+  <!-- ===============================================================
+       100100 | Encoded / obfuscated PowerShell
+       ATT&CK  | T1059.001 PowerShell, T1027 Obfuscated Files or Information
+       Why     | Attackers base64-encode commands to hide intent from
+                 casual review and simple string-matching defenses.
+       Triage  | Decode the command (CyberChef: "From Base64" + "Decode text UTF-16LE").
+                 Check the parent process: Office apps or browsers as parent = very suspicious.
+       ================================================================ -->
+  <rule id="100100" level="12">
+    <if_group>sysmon_event1</if_group>
+    <field name="win.eventdata.image" type="pcre2">(?i)\\(powershell|pwsh)\.exe$</field>
+    <field name="win.eventdata.commandLine" type="pcre2">(?i)\s-(e|ec|enc|encodedcommand)\s|frombase64string</field>
+    <description>Encoded PowerShell command executed on $(win.system.computer) by $(win.eventdata.user)</description>
+    <mitre>
+      <id>T1059.001</id>
+      <id>T1027</id>
+    </mitre>
+  </rule>
+
+  <!-- ===============================================================
+       100101 | Process accessing LSASS memory (credential dumping)
+       ATT&CK  | T1003.001 OS Credential Dumping: LSASS Memory
+       Why     | LSASS holds credentials in memory. Tools like Mimikatz,
+                 ProcDump and comsvcs.dll MiniDump read it to steal passwords/hashes.
+       Triage  | Which process opened LSASS? Is it a known security tool (EDR, AV)?
+                 Treat unknown sources as CRITICAL and isolate the host.
+       ================================================================ -->
+  <rule id="100101" level="14">
+    <if_group>sysmon_event_10</if_group>
+    <field name="win.eventdata.targetImage" type="pcre2">(?i)\\lsass\.exe$</field>
+    <field name="win.eventdata.sourceImage" type="pcre2" negate="yes">(?i)\\(MsMpEng|wmiprvse|svchost|csrss|wininit|lsm)\.exe$</field>
+    <description>Possible credential dumping: $(win.eventdata.sourceImage) accessed LSASS memory</description>
+    <mitre>
+      <id>T1003.001</id>
+    </mitre>
+  </rule>
+
+  <!-- ===============================================================
+       100102 | Scheduled task created from the command line
+       ATT&CK  | T1053.005 Scheduled Task/Job: Scheduled Task
+       Why     | A classic persistence method. Malware schedules itself to
+                 run at logon or on a timer.
+       Triage  | What does the task execute? From which folder (AppData/Temp = bad)?
+                 Who created it, and is that user an admin who normally does this?
+       ================================================================ -->
+  <rule id="100102" level="10">
+    <if_group>sysmon_event1</if_group>
+    <field name="win.eventdata.image" type="pcre2">(?i)\\schtasks\.exe$</field>
+    <field name="win.eventdata.commandLine" type="pcre2">(?i)/create</field>
+    <description>Scheduled task created via schtasks.exe on $(win.system.computer)</description>
+    <mitre>
+      <id>T1053.005</id>
+    </mitre>
+  </rule>
+
+  <!-- ===============================================================
+       100103 | Local user account created with "net user /add"
+       ATT&CK  | T1136.001 Create Account: Local Account
+       Why     | Attackers create backdoor accounts to keep access.
+       Triage  | Was there a change ticket? Was the account added to the
+                 Administrators group shortly after (net localgroup)?
+       ================================================================ -->
+  <rule id="100103" level="10">
+    <if_group>sysmon_event1</if_group>
+    <field name="win.eventdata.image" type="pcre2">(?i)\\net1?\.exe$</field>
+    <field name="win.eventdata.commandLine" type="pcre2">(?i)user\s+\S+\s+\S*\s*/add</field>
+    <description>Local user account created from the command line on $(win.system.computer)</description>
+    <mitre>
+      <id>T1136.001</id>
+    </mitre>
+  </rule>
+
+  <!-- ===============================================================
+       100104 | Certutil used to download a file (Living-off-the-Land)
+       ATT&CK  | T1105 Ingress Tool Transfer
+       Why     | certutil.exe is a signed Windows binary that attackers abuse
+                 to download payloads while blending in.
+       Triage  | Pull the URL from the command line and check it in VirusTotal / URLScan.
+                 Find the downloaded file and hash it.
+       ================================================================ -->
+  <rule id="100104" level="12">
+    <if_group>sysmon_event1</if_group>
+    <field name="win.eventdata.image" type="pcre2">(?i)\\certutil\.exe$</field>
+    <field name="win.eventdata.commandLine" type="pcre2">(?i)(urlcache|verifyctl).*(http|ftp)</field>
+    <description>Certutil used to download a remote file on $(win.system.computer)</description>
+    <mitre>
+      <id>T1105</id>
+    </mitre>
+  </rule>
+
+  <!-- ===============================================================
+       100105 | Windows event logs cleared
+       ATT&CK  | T1070.001 Indicator Removal: Clear Windows Event Logs
+       Why     | Clearing logs is anti-forensics. Legitimate admins rarely do this.
+       Triage  | Who cleared the logs? Rebuild the timeline from the SIEM,
+                 which already has copies of the events.
+       ================================================================ -->
+  <rule id="100105" level="12">
+    <if_group>sysmon_event1</if_group>
+    <field name="win.eventdata.commandLine" type="pcre2">(?i)(wevtutil(\.exe)?\s+cl\s)|(Clear-EventLog)</field>
+    <description>Attempt to clear Windows event logs on $(win.system.computer)</description>
+    <mitre>
+      <id>T1070.001</id>
+    </mitre>
+  </rule>
+
+</group>
